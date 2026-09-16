@@ -1,0 +1,26 @@
+{
+  "name": "jev-review",
+  "version": "0.1.0",
+  "description": "A small staged code-review workflow built with TypeSafe Jev.",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:devagrawal09/jev-review",
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module",
+  "scripts": {
+    "review": "node --env-file=.env review-code.ts",
+    "review:save": "node --env-file=.env dashboard/save-review.ts",
+    "dashboard": "node dashboard/server.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && node --check dashboard/app.js"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
