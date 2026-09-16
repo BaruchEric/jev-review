@@ -46,7 +46,29 @@ Open [http://127.0.0.1:4317](http://127.0.0.1:4317).
 | `npm run review -- <path>` | Print a review report as JSON |
 | `npm run review:save -- <path>` | Save the latest report for the dashboard |
 | `npm run dashboard` | Start the local dashboard |
-| `npm run check` | Run syntax checks |
+| `npm run check` | Typecheck, verify dependency flow, and syntax-check the dashboard client |
+
+## Architecture
+
+Everything lives under `src/`, arranged in layers that only depend downward:
+
+```text
+src/
+  domain/      config.ts, types.ts, patch.ts   policy, report shapes, diff parsing (no imports)
+  adapters/    git.ts, report-store.ts         changed-file discovery, atomic report save/load
+  review/      judgments.ts, workflow.ts       Jev model calls and the staged orchestration
+  cli/         review.ts, save-review.ts       `npm run review` / `npm run review:save`
+  dashboard/   server.ts, public/              local-only HTTP server and the plain client
+```
+
+Imports point toward lower layers only:
+
+```text
+{ cli, dashboard } -> review -> adapters -> domain
+```
+
+`scripts/check-dependencies.ts` fails `npm run check` on any upward import, any
+import between `cli` and `dashboard`, or any cycle.
 
 ## Current Scope
 

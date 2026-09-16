@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["review-code.ts", "dashboard/**/*.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }

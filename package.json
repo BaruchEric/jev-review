@@ -10,11 +10,12 @@
   },
   "type": "module",
   "scripts": {
-    "review": "node --env-file=.env review-code.ts",
-    "review:save": "node --env-file=.env dashboard/save-review.ts",
-    "dashboard": "node dashboard/server.ts",
+    "review": "node --env-file=.env src/cli/review.ts",
+    "review:save": "node --env-file=.env src/cli/save-review.ts",
+    "dashboard": "node src/dashboard/server.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node --check dashboard/app.js"
+    "check:deps": "node scripts/check-dependencies.ts",
+    "check": "npm run typecheck && npm run check:deps && node --check src/dashboard/public/app.js"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"

@@ -1,13 +1,16 @@
-// Local-only dashboard server: static assets plus the saved review report.
-import { readFile, stat } from "node:fs/promises";
+// Local-only dashboard server: a fixed list of static assets from ./public
+// plus the saved review report as JSON. Binds to loopback only.
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join, relative } from "node:path";
-import { isReviewReport, reportPath } from "./report.ts";
+import { readReport, reportPath } from "../adapters/report-store.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT ?? 4317);
 const REPORT = reportPath();
+const PUBLIC_DIR = join(import.meta.dirname, "public");
 
+// Only these files are served; nothing else on disk is reachable.
 const assets: Record<string, [file: string, type: string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
@@ -28,43 +31,22 @@ function json(res: ServerResponse, status: number, body: unknown) {
   send(res, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
-async function review() {
-  const source = relative(process.cwd(), REPORT) || REPORT;
-  let text: string;
-  let savedAt: string;
-  try {
-    [text, savedAt] = await Promise.all([
-      readFile(REPORT, "utf8"),
-      stat(REPORT).then((info) => info.mtime.toISOString()),
-    ]);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { status: "empty", source };
-    }
-    return { status: "error", source, message: "Report could not be read" };
-  }
-
-  try {
-    const report = JSON.parse(text);
-    if (isReviewReport(report)) return { status: "ok", source, savedAt, report };
-  } catch {}
-  return { status: "error", source, message: "Report is not review-code.ts output" };
-}
-
 export async function handle(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     return send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
   }
 
   const { pathname } = new URL(req.url ?? "/", "http://localhost");
-  if (pathname === "/api/review") return json(res, 200, await review());
+  if (pathname === "/api/review") {
+    const source = relative(process.cwd(), REPORT) || REPORT;
+    return json(res, 200, { source, ...(await readReport(REPORT)) });
+  }
 
-  // Only the fixed asset list is served; nothing else on disk is reachable.
   const asset = assets[pathname];
   if (!asset) return send(res, 404, "text/plain; charset=utf-8", "Not found");
 
   const [file, type] = asset;
-  send(res, 200, type, await readFile(join(import.meta.dirname, file)));
+  send(res, 200, type, await readFile(join(PUBLIC_DIR, file)));
 }
 
 if (import.meta.main) {
