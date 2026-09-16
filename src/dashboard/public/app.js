@@ -3,14 +3,19 @@ const THRESHOLD = 0.7;
 // Severity is an expected score on the 0–3 rubric in src/domain/config.ts.
 const SEVERITY_MAX = 3;
 
-const DIMENSIONS = [
+const DEFAULT_DIMENSIONS = [
   ["correctness", "Correctness", "Corr"],
   ["security", "Security", "Sec"],
   ["reliability", "Reliability", "Rel"],
   ["compatibility", "Compatibility", "Compat"],
   ["testGap", "Test gap", "Tests"],
 ];
-const DIMENSION_LABEL = Object.fromEntries(DIMENSIONS.map(([key, label]) => [key, label]));
+
+function dimensionsFor(report) {
+  return Array.isArray(report.dimensions)
+    ? report.dimensions.map(({ key, label, short }) => [key, label, short])
+    : DEFAULT_DIMENSIONS;
+}
 
 const app = document.getElementById("app");
 const meta = document.getElementById("meta");
@@ -68,10 +73,16 @@ function fill(p) {
 }
 
 function section(label, aside, ...content) {
+  const expanded = label === "Workflow" || label === "Findings";
   return h(
-    "section",
-    { class: "block" },
-    h("div", { class: "block-head" }, h("h2", {}, label), aside),
+    "details",
+    { class: "block", open: expanded },
+    h(
+      "summary",
+      { class: "block-head" },
+      h("h2", {}, label),
+      h("span", { class: "block-aside" }, aside),
+    ),
     ...content,
   );
 }
@@ -89,10 +100,11 @@ function quiet(title, detail, command) {
 function summary(report) {
   const findings = report.findings;
   const blocking = findings.filter((f) => f.action === "request_changes").length;
-  const tests = report.changedTestFiles;
+  const tests = report.contextFiles ?? report.changedTestFiles ?? [];
+  const testLabel = report.mode === "codebase" ? "test files" : "changed tests";
   const stats = [
     { value: report.screenedFiles, label: "files" },
-    { value: tests.length, label: "tests", title: tests.join("\n") || null },
+    { value: tests.length, label: testLabel, title: tests.join("\n") || null },
     { value: report.followedSignals, label: "followed", title: `signals ≥ ${THRESHOLD.toFixed(2)} inspected` },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
@@ -145,6 +157,7 @@ function workflow(report) {
 function profiles(report) {
   const list = report.profiles;
   if (!Array.isArray(list) || list.length === 0) return null;
+  const categoryHeading = report.mode === "codebase" ? "Role" : "Change";
 
   const table = h(
     "table",
@@ -155,7 +168,7 @@ function profiles(report) {
       h(
         "tr",
         {},
-        ["File", "Change", "Priority"].map((label) => h("th", { scope: "col" }, label)),
+        ["File", categoryHeading, "Priority"].map((label) => h("th", { scope: "col" }, label)),
       ),
     ),
     h(
@@ -163,17 +176,19 @@ function profiles(report) {
       {},
       list.map((profile) => {
         const [dir, base] = splitPath(profile.file);
+        const category = profile.category ?? profile.changeType ?? "–";
+        const categoryConfidence = profile.categoryConfidence ?? profile.changeTypeConfidence;
         return h(
           "tr",
           {
-            title: `change confidence ${fixed(profile.changeTypeConfidence)} · priority confidence ${fixed(profile.reviewPriorityConfidence)}`,
+            title: "category confidence " + fixed(categoryConfidence) + " · priority confidence " + fixed(profile.reviewPriorityConfidence),
           },
           h(
             "td",
             { class: "profile-file" },
             h("code", { title: profile.file }, h("span", { class: "dir" }, dir), h("span", { class: "base" }, base)),
           ),
-          h("td", { class: "profile-type" }, String(profile.changeType ?? "–")),
+          h("td", { class: "profile-type" }, String(category)),
           h("td", { class: "profile-priority" }, severityMeter(profile.reviewPriority)),
         );
       }),
@@ -188,7 +203,8 @@ function profiles(report) {
 }
 
 function matrix(report) {
-  const rows = [...report.matrix].sort((a, b) => maxP(b) - maxP(a));
+  const dimensions = dimensionsFor(report);
+  const rows = [...report.matrix].sort((a, b) => maxP(b, dimensions) - maxP(a, dimensions));
 
   const toggle = h(
     "button",
@@ -232,7 +248,7 @@ function matrix(report) {
         "tr",
         {},
         h("th", { scope: "col", class: "file-col" }, h("span", { class: "sr" }, "File")),
-        DIMENSIONS.map(([key, label, short]) =>
+        dimensions.map(([key, label, short]) =>
           h(
             "th",
             { scope: "col", title: label },
@@ -255,7 +271,7 @@ function matrix(report) {
             { scope: "row", class: "file", title: row.file },
             h("span", { class: "path" }, h("span", { class: "dir" }, dir), h("span", { class: "base" }, base)),
           ),
-          DIMENSIONS.map(([key, label]) => {
+          dimensions.map(([key, label]) => {
             const p = row[key];
             if (!isNum(p)) return h("td", { class: "cell missing" }, h("span", { class: "v" }, "–"));
             const hot = p >= THRESHOLD;
@@ -277,8 +293,8 @@ function matrix(report) {
   return section("Noul matrix", legend, h("div", { class: "matrix-wrap" }, table));
 }
 
-function maxP(row) {
-  return Math.max(0, ...DIMENSIONS.map(([key]) => (isNum(row[key]) ? row[key] : 0)));
+function maxP(row, dimensions) {
+  return Math.max(0, ...dimensions.map(([key]) => (isNum(row[key]) ? row[key] : 0)));
 }
 
 function severityMeter(severity) {
@@ -296,6 +312,7 @@ function severityMeter(severity) {
 
 function findings(report) {
   const list = report.findings;
+  const labels = Object.fromEntries(dimensionsFor(report).map(([key, label]) => [key, label]));
   const count = h("span", { class: "count" }, list.length);
 
   if (list.length === 0) {
@@ -344,7 +361,7 @@ function findings(report) {
           h(
             "td",
             { class: "dim" },
-            h("span", {}, DIMENSION_LABEL[finding.dimension] ?? String(finding.dimension)),
+            h("span", {}, labels[finding.dimension] ?? String(finding.dimension)),
             finding.mechanism && h("small", {}, String(finding.mechanism)),
           ),
           h("td", { class: "sev" }, h("span", { class: "sr" }, "severity "), severityMeter(finding.severity)),
@@ -368,7 +385,10 @@ function renderMeta(state) {
   if (state?.status !== "ok") return;
   const scope = state.report.scope;
   const name = scope.split("/").filter(Boolean).pop() ?? scope;
+  const mode = state.report.mode === "codebase" ? "Codebase scan" : "Change review";
   meta.append(
+    h("span", { class: "mode", title: mode }, mode),
+    h("span", { class: "sep", "aria-hidden": "true" }, "·"),
     h("span", { class: "scope", title: scope }, name),
     h("span", { class: "sep", "aria-hidden": "true" }, "·"),
     h("time", { datetime: state.savedAt, title: new Date(state.savedAt).toLocaleString() }, ago(state.savedAt)),
@@ -393,7 +413,7 @@ function render(state) {
       );
       break;
     case "empty":
-      app.replaceChildren(quiet("No review yet", null, "npm run review:save -- <path>"));
+      app.replaceChildren(quiet("No review yet", null, "npm run review:changes:save -- <path>"));
       break;
     case "error":
       app.replaceChildren(quiet("Unreadable report", `${state.message} · ${state.source}`));

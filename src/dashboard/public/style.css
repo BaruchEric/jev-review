@@ -193,9 +193,36 @@ main {
 .block-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  margin: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.block[open] > .block-head {
   margin-bottom: 16px;
+}
+
+.block-head::-webkit-details-marker {
+  display: none;
+}
+
+.block-head::after {
+  width: 16px;
+  color: var(--muted);
+  content: "+";
+  font: 500 16px/1 var(--mono);
+  text-align: center;
+}
+
+.block[open] > .block-head::after {
+  content: "−";
+}
+
+.block-aside {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
 }
 
 .block-head h2 {

@@ -1,9 +1,16 @@
-// Shapes that flow through the review workflow and into the saved report.
+// Shapes shared by both review modes and the saved dashboard report.
 import type { Dimension } from "./config.ts";
+
+export type ReviewMode = "changes" | "codebase";
 
 export type ChangedFile = {
   path: string;
   patch: string;
+};
+
+export type SourceFile = {
+  path: string;
+  content: string;
 };
 
 export type Hunk = {
@@ -12,20 +19,18 @@ export type Hunk = {
   patch: string;
 };
 
-// One row of the screening matrix: every dimension scored for one file.
-export type Screening = {
-  file: ChangedFile;
+export type Screening<File extends { path: string }> = {
+  file: File;
   probabilities: Record<Dimension, number>;
 };
 
-// One matrix cell that crossed the screening threshold.
-export type Signal = {
-  file: ChangedFile;
+export type Signal<File extends { path: string }> = {
+  file: File;
   dimension: Dimension;
   probability: number;
 };
 
-export type Finding = Signal & {
+export type Finding<File extends { path: string }> = Signal<File> & {
   line: number;
   locationConfidence: number;
   mechanism: string;
@@ -39,16 +44,16 @@ export type Finding = Signal & {
 
 export type FileProfile = {
   file: string;
-  changeType: string;
-  changeTypeConfidence: number;
+  category: string;
+  categoryConfidence: number;
   reviewPriority: number;
   reviewPriorityConfidence: number;
 };
 
-// The JSON document printed by the CLI, saved by review:save, and read by
-// the dashboard. Findings are flattened to file paths here.
 export type ReviewReport = {
+  mode: ReviewMode;
   scope: string;
+  dimensions: Array<{ key: Dimension; label: string; short: string }>;
   config: {
     screenThreshold: number;
     severityMax: number;
@@ -56,7 +61,7 @@ export type ReviewReport = {
     maxProfiles: number;
   };
   screenedFiles: number;
-  changedTestFiles: string[];
+  contextFiles: string[];
   matrix: Array<{ file: string } & Record<Dimension, number>>;
   followedSignals: number;
   profiles: FileProfile[];
@@ -68,17 +73,16 @@ export type ReviewReport = {
     locatedFindings: number;
     routedFindings: number;
   };
-  findings: Array<Omit<Finding, "file"> & { file: string }>;
+  findings: Array<Omit<Finding<{ path: string }>, "file"> & { file: string }>;
 };
 
-// Loose structural check for JSON read back from disk or a child process.
+// Deliberately loose so a report saved by an older version remains viewable.
 export function isReviewReport(value: unknown): value is ReviewReport {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const report = value as Record<string, unknown>;
   return (
     typeof report.scope === "string" &&
     typeof report.screenedFiles === "number" &&
-    Array.isArray(report.changedTestFiles) &&
     Array.isArray(report.matrix) &&
     typeof report.followedSignals === "number" &&
     Array.isArray(report.findings)

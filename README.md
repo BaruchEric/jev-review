@@ -1,6 +1,6 @@
 # Jev Review
 
-A small code-review workflow built with [TypeSafe Jev](https://typesafe.ai). It turns a Git diff into structured review signals, follows the strongest ones through focused model calls, and presents the result in a quiet local dashboard.
+A small code-review workflow built with [TypeSafe Jev](https://typesafe.ai). It can review a Git diff or scan a complete codebase, follows the strongest structured signals through focused model calls, and presents the result in a quiet local dashboard.
 
 ![Jev Review dashboard](docs/dashboard.png)
 
@@ -17,11 +17,13 @@ Noul risk matrix
   -> conditional Choice reviewer routing
 ```
 
-- Reviews changed JavaScript and TypeScript files from the current Git diff.
-- Uses changed tests as cross-file context when judging test gaps.
+- Exposes separate change-review and complete-codebase entry points.
+- Uses changed or related tests as context when judging test gaps.
 - Screens correctness, security, reliability, compatibility, and test coverage.
-- Selects concrete hunks before scoring impact.
+- Selects concrete diff hunks or source regions before scoring impact.
+- Uses structured hints, counterexamples, and explicit decision boundaries.
 - Applies thresholds and workflow policy in code.
+- Shows large reports in collapsible dashboard sections.
 - Binds the dashboard to `127.0.0.1` and never serves environment files.
 
 ## Quick Start
@@ -33,7 +35,11 @@ npm install
 cp .env.example .env
 # Add TYPESAFE_API_KEY to .env
 
-npm run review:save -- /path/to/git/repository
+# Review the current Git diff
+npm run review:changes:save -- /path/to/git/repository
+
+# Or scan every non-ignored source file under a scope
+npm run review:codebase:save -- /path/to/git/repository-or-package
 npm run dashboard
 ```
 
@@ -43,8 +49,10 @@ Open [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
 | Command | Purpose |
 | --- | --- |
-| `npm run review -- <path>` | Print a review report as JSON |
-| `npm run review:save -- <path>` | Save the latest report for the dashboard |
+| `npm run review:changes -- <path>` | Print a current-diff review as JSON |
+| `npm run review:changes:save -- <path>` | Save a current-diff review for the dashboard |
+| `npm run review:codebase -- <path>` | Print a complete codebase scan as JSON |
+| `npm run review:codebase:save -- <path>` | Save a complete codebase scan for the dashboard |
 | `npm run dashboard` | Start the local dashboard |
 | `npm run check` | Typecheck, verify dependency flow, and syntax-check the dashboard client |
 
@@ -54,10 +62,12 @@ Everything lives under `src/`, arranged in layers that only depend downward:
 
 ```text
 src/
-  domain/      config.ts, types.ts, patch.ts   policy, report shapes, diff parsing (no imports)
-  adapters/    git.ts, report-store.ts         changed-file discovery, atomic report save/load
-  review/      judgments.ts, workflow.ts       Jev model calls and the staged orchestration
-  cli/         review.ts, save-review.ts       `npm run review` / `npm run review:save`
+  domain/      config.ts, types.ts, patch.ts   shared policy, report shapes, diff parsing
+  adapters/    git.ts, repository-files.ts     change and complete-source discovery
+               report-store.ts                 atomic report save/load
+  review/      changes.ts, codebase.ts          mode-specific workflows
+               *-judgments.ts, workflow.ts     Jev calls and shared staged orchestration
+  cli/         review-*.ts, save-*.ts           explicit mode entry points
   dashboard/   server.ts, public/              local-only HTTP server and the plain client
 ```
 

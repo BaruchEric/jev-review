@@ -1,43 +1,59 @@
-// Orchestrates a full review of a Git scope: screen every changed source
-// file, profile the riskiest few, follow the strongest signals, and assemble
-// the report. Thresholds and limits are policy from the domain layer.
-import { changedFiles } from "../adapters/git.ts";
+// Shared staged orchestration. Each review mode owns discovery and judgments;
+// this module owns concurrency, thresholds, ranking, and report assembly.
 import {
   CONCURRENCY,
   type Dimension,
+  dimensionMetadata,
   dimensions,
   MAX_FOLLOW_UPS,
   MAX_PROFILES,
   SCREEN_THRESHOLD,
   SEVERITY_MAX,
-  TEST_FILE,
 } from "../domain/config.ts";
-import type { Finding, ReviewReport, Screening, Signal } from "../domain/types.ts";
-import { locateSignal, profileFile, screenFile } from "./judgments.ts";
+import type {
+  FileProfile,
+  Finding,
+  ReviewMode,
+  ReviewReport,
+  Screening,
+  Signal,
+} from "../domain/types.ts";
 
 export type Log = (message: string) => void;
 
-export async function runReview(scope: string, log: Log): Promise<ReviewReport> {
-  const files = changedFiles(scope);
+type Strategy<File extends { path: string }, Context extends { path: string }> = {
+  mode: ReviewMode;
+  subject: string;
+  context: string;
+  discover: (scope: string) => { files: File[]; contextFiles: Context[] };
+  screen: (file: File, contextFiles: Context[]) => Promise<Screening<File>>;
+  profile: (
+    file: File,
+    probabilities: Record<Dimension, number>,
+  ) => Promise<FileProfile>;
+  locate: (signal: Signal<File>) => Promise<Finding<File> | null>;
+};
+
+export async function runReview<File extends { path: string }, Context extends { path: string }>(
+  scope: string,
+  log: Log,
+  strategy: Strategy<File, Context>,
+): Promise<ReviewReport> {
+  const { files, contextFiles } = strategy.discover(scope);
   if (files.length === 0) {
-    throw new Error(`No changed JavaScript or TypeScript files found under ${scope}`);
+    throw new Error("No " + strategy.subject + " JavaScript or TypeScript files found under " + scope);
   }
 
-  const changedTests = files.filter((file) => TEST_FILE.test(file.path));
-  const sourceFiles = files.filter((file) => !changedTests.includes(file));
-
-  log(
-    `Screening ${sourceFiles.length} changed source files with ${changedTests.length} changed test files as context...`,
-  );
-  const matrix = await mapLimit(sourceFiles, CONCURRENCY, (file) => {
-    log(`  screen ${file.path}`);
-    return screenFile(file, changedTests);
+  log("Screening " + files.length + " " + strategy.subject + " files with " + contextFiles.length + " " + strategy.context + " files as context...");
+  const matrix = await mapLimit(files, CONCURRENCY, (file) => {
+    log("  screen " + file.path);
+    return strategy.screen(file, contextFiles);
   });
 
   const signals = matrix
     .flatMap(({ file, probabilities }) =>
       (Object.entries(probabilities) as [Dimension, number][]).map(
-        ([dimension, probability]): Signal => ({ file, dimension, probability }),
+        ([dimension, probability]): Signal<File> => ({ file, dimension, probability }),
       ),
     )
     .filter((signal) => signal.probability >= SCREEN_THRESHOLD)
@@ -46,40 +62,40 @@ export async function runReview(scope: string, log: Log): Promise<ReviewReport> 
   const profileCandidates = [...matrix]
     .sort((a, b) => maxProbability(b) - maxProbability(a))
     .slice(0, MAX_PROFILES);
-  log(`Profiling ${profileCandidates.length} files...`);
+  log("Profiling " + profileCandidates.length + " files...");
   const profiles = await mapLimit(profileCandidates, CONCURRENCY, ({ file, probabilities }) => {
-    log(`  profile ${file.path}`);
-    return profileFile(file, probabilities);
+    log("  profile " + file.path);
+    return strategy.profile(file, probabilities);
   });
 
   const followUps = signals.slice(0, MAX_FOLLOW_UPS);
-  log(
-    `Following ${followUps.length} of ${signals.length} signals at or above ${SCREEN_THRESHOLD}...`,
-  );
+  log("Following " + followUps.length + " of " + signals.length + " signals at or above " + SCREEN_THRESHOLD + "...");
   const located = await mapLimit(followUps, CONCURRENCY, (signal) => {
-    log(`  inspect ${signal.file.path} [${signal.dimension}=${signal.probability.toFixed(2)}]`);
-    return locateSignal(signal);
+    log("  inspect " + signal.file.path + " [" + signal.dimension + "=" + signal.probability.toFixed(2) + "]");
+    return strategy.locate(signal);
   });
 
   const findings = located
-    .filter((finding): finding is Finding => finding !== null)
+    .filter((finding): finding is Finding<File> => finding !== null)
     .sort((a, b) => b.severity - a.severity);
 
   return {
+    mode: strategy.mode,
     scope,
+    dimensions: dimensionMetadata,
     config: {
       screenThreshold: SCREEN_THRESHOLD,
       severityMax: SEVERITY_MAX,
       maxFollowUps: MAX_FOLLOW_UPS,
       maxProfiles: MAX_PROFILES,
     },
-    screenedFiles: sourceFiles.length,
-    changedTestFiles: changedTests.map((file) => file.path),
+    screenedFiles: files.length,
+    contextFiles: contextFiles.map((file) => file.path),
     matrix: matrix.map(({ file, probabilities }) => ({ file: file.path, ...probabilities })),
     followedSignals: followUps.length,
     profiles,
     workflow: {
-      screenedCells: sourceFiles.length * Object.keys(dimensions).length,
+      screenedCells: files.length * Object.keys(dimensions).length,
       thresholdSignals: signals.length,
       profiledFiles: profiles.length,
       followedSignals: followUps.length,
@@ -90,11 +106,10 @@ export async function runReview(scope: string, log: Log): Promise<ReviewReport> 
   };
 }
 
-function maxProbability(screening: Screening): number {
+function maxProbability<File extends { path: string }>(screening: Screening<File>): number {
   return Math.max(...Object.values(screening.probabilities));
 }
 
-// Runs callback over items with at most `limit` in flight, preserving order.
 async function mapLimit<T, R>(
   items: T[],
   limit: number,

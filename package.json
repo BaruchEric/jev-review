@@ -10,8 +10,10 @@
   },
   "type": "module",
   "scripts": {
-    "review": "node --env-file=.env src/cli/review.ts",
-    "review:save": "node --env-file=.env src/cli/save-review.ts",
+    "review:changes": "node --env-file=.env src/cli/review-changes.ts",
+    "review:changes:save": "node --env-file=.env src/cli/save-changes.ts",
+    "review:codebase": "node --env-file=.env src/cli/review-codebase.ts",
+    "review:codebase:save": "node --env-file=.env src/cli/save-codebase.ts",
     "dashboard": "node src/dashboard/server.ts",
     "typecheck": "tsc --noEmit",
     "check:deps": "node scripts/check-dependencies.ts",
