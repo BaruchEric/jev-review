@@ -45,9 +45,14 @@ export async function runReview<File extends { path: string }, Context extends {
   }
 
   log("Screening " + files.length + " " + strategy.subject + " files with " + contextFiles.length + " " + strategy.context + " files as context...");
-  const matrix = await mapLimit(files, CONCURRENCY, (file) => {
+  const matrix = await mapLimit(files, CONCURRENCY, async (file) => {
     log("  screen " + file.path);
-    return strategy.screen(file, contextFiles);
+    try {
+      return await strategy.screen(file, contextFiles);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error("Screening " + file.path + " failed: " + message, { cause: error });
+    }
   });
 
   const signals = matrix

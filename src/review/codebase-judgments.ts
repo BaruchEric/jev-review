@@ -23,7 +23,9 @@ import type {
 
 const client = new TypeSafeClient();
 const REGION_LINES = 80;
-const MAX_RELATED_TESTS = 6;
+const SCREEN_REGION_LINES = 160;
+const MAX_RELATED_TESTS = 4;
+const MAX_TEST_SNIPPET_CHARS = 1_800;
 
 const fileRoles = {
   entrypoint: "Application, command, route, or public package entry point",
@@ -39,104 +41,119 @@ export async function screenSourceFile(
   testFiles: SourceFile[],
 ): Promise<Screening<SourceFile>> {
   const relatedTests = selectRelatedTests(file, testFiles);
-  const response = await client.systemOne({
-    state: { file, relatedTests },
-    questions: {
-      correctness: noul(
-        {
-          question: "Does file.content directly support that this code contains incorrect runtime behavior?",
-          inspect: "file.content",
-          focus: "Concrete behavior, state, data-flow, or async errors reachable in realistic use",
-          ignore: ["Style preferences", "Naming concerns", "Missing context with no concrete failure path"],
-        },
-        {
-          true: {
-            what: "The source contains a realistic path to a wrong runtime result",
-            examples: ["A condition handles the opposite case", "State is updated under the wrong key"],
+  const results: Array<Record<Dimension, number>> = [];
+
+  for (const region of sourceRegions(file.content, SCREEN_REGION_LINES)) {
+    const response = await client.systemOne({
+      state: {
+        file: { path: file.path, startLine: region.startLine, content: region.content },
+        relatedTests,
+      },
+      questions: {
+        correctness: noul(
+          {
+            question: "Does file.content directly support that this code contains incorrect runtime behavior?",
+            inspect: "file.content",
+            focus: "Concrete behavior, state, data-flow, or async errors reachable in realistic use",
+            ignore: ["Style preferences", "Naming concerns", "Missing context with no concrete failure path"],
           },
-          false: {
-            what: "The implementation is coherent or no concrete incorrect path is supported",
-            not_for: "Unusual code that is still internally consistent",
+          {
+            true: {
+              what: "The source contains a realistic path to a wrong runtime result",
+              examples: ["A condition handles the opposite case", "State is updated under the wrong key"],
+            },
+            false: {
+              what: "The implementation is coherent or no concrete incorrect path is supported",
+              not_for: "Unusual code that is still internally consistent",
+            },
           },
-        },
-      ),
-      security: noul(
-        {
-          question: "Does file.content directly support that this code weakens a security boundary?",
-          inspect: "file.content",
-          focus: "Authorization, injection, secret exposure, trust boundaries, and unsafe defaults",
-        },
-        {
-          true: {
-            what: "The source contains a concrete path around a control or into an unsafe sink",
-            examples: ["A privileged action lacks authorization", "Untrusted input reaches command execution"],
+        ),
+        security: noul(
+          {
+            question: "Does file.content directly support that this code weakens a security boundary?",
+            inspect: "file.content",
+            focus: "Authorization, injection, secret exposure, trust boundaries, and unsafe defaults",
           },
-          false: {
-            what: "No concrete security weakness is supported by this file",
-            not_for: "Code that merely handles credentials or permissions safely",
+          {
+            true: {
+              what: "The source contains a concrete path around a control or into an unsafe sink",
+              examples: ["A privileged action lacks authorization", "Untrusted input reaches command execution"],
+            },
+            false: {
+              what: "No concrete security weakness is supported by this file",
+              not_for: "Code that merely handles credentials or permissions safely",
+            },
           },
-        },
-      ),
-      reliability: noul(
-        {
-          question: "Does file.content directly support that this code can crash, race, leak, deadlock, or recover poorly?",
-          inspect: "file.content",
-          focus: "Realistic resource, concurrency, cancellation, and failure paths",
-        },
-        {
-          true: {
-            what: "A reachable path can lose work, leak resources, hang, crash, or leave inconsistent state",
-            examples: ["Cleanup is skipped after failure", "Concurrent work mutates shared state unsafely"],
+        ),
+        reliability: noul(
+          {
+            question: "Does file.content directly support that this code can crash, race, leak, deadlock, or recover poorly?",
+            inspect: "file.content",
+            focus: "Realistic resource, concurrency, cancellation, and failure paths",
           },
-          false: { what: "Lifecycle and failure handling appear safe, or no concrete failure path is supported" },
-        },
-      ),
-      compatibility: noul(
-        {
-          question: "Does file.content directly support an internal inconsistency that can break a caller, format, protocol, or documented behavior?",
-          inspect: "file.content",
-          focus: "Contradictions visible in this source, not guesses about unknown historical versions",
-        },
-        {
-          true: {
-            what: "The source contains conflicting contracts or a concrete caller-facing mismatch",
-            examples: ["A parser and serializer disagree on a required field", "An exported type contradicts runtime behavior"],
+          {
+            true: {
+              what: "A reachable path can lose work, leak resources, hang, crash, or leave inconsistent state",
+              examples: ["Cleanup is skipped after failure", "Concurrent work mutates shared state unsafely"],
+            },
+            false: { what: "Lifecycle and failure handling appear safe, or no concrete failure path is supported" },
           },
-          false: {
-            what: "The visible contracts are internally consistent",
-            not_for: "Speculation that an API may once have behaved differently",
+        ),
+        compatibility: noul(
+          {
+            question: "Does file.content directly support an internal inconsistency that can break a caller, format, protocol, or documented behavior?",
+            inspect: "file.content",
+            focus: "Contradictions visible in this source, not guesses about unknown historical versions",
           },
-        },
-      ),
-      testGap: noul(
-        {
-          question: "Does file.content contain important behavior without adequate targeted evidence in relatedTests?",
-          compare: ["file.content", "relatedTests"],
-          focus: "Critical branches, boundaries, failure paths, and component interactions",
-          caution: "A filename mismatch alone is not enough; identify behavior that specifically needs a test",
-        },
-        {
-          true: {
-            what: "Important behavior is present and the related tests do not exercise it",
-            examples: ["An error-recovery branch has no assertion", "Authorization behavior lacks a denial test"],
+          {
+            true: {
+              what: "The source contains conflicting contracts or a concrete caller-facing mismatch",
+              examples: ["A parser and serializer disagree on a required field", "An exported type contradicts runtime behavior"],
+            },
+            false: {
+              what: "The visible contracts are internally consistent",
+              not_for: "Speculation that an API may once have behaved differently",
+            },
           },
-          false: {
-            what: "Related tests cover the important behavior, or this file has no behavior needing direct tests",
-            examples: ["A focused test covers the boundary", "A declarative constants module"],
+        ),
+        testGap: noul(
+          {
+            question: "Does file.content contain important behavior without adequate targeted evidence in relatedTests?",
+            compare: ["file.content", "relatedTests"],
+            focus: "Critical branches, boundaries, failure paths, and component interactions",
+            caution: "A filename mismatch alone is not enough; identify behavior that specifically needs a test",
           },
-        },
-      ),
-    },
+          {
+            true: {
+              what: "Important behavior is present and the related tests do not exercise it",
+              examples: ["An error-recovery branch has no assertion", "Authorization behavior lacks a denial test"],
+            },
+            false: {
+              what: "Related tests cover the important behavior, or this file has no behavior needing direct tests",
+              examples: ["A focused test covers the boundary", "A declarative constants module"],
+            },
+          },
+        ),
+      },
   });
 
-  return {
-    file,
-    probabilities: {
+    results.push({
       correctness: response.answers.correctness.noul,
       security: response.answers.security.noul,
       reliability: response.answers.reliability.noul,
       compatibility: response.answers.compatibility.noul,
       testGap: response.answers.testGap.noul,
+    });
+  }
+
+  return {
+    file,
+    probabilities: {
+      correctness: Math.max(...results.map((result) => result.correctness)),
+      security: Math.max(...results.map((result) => result.security)),
+      reliability: Math.max(...results.map((result) => result.reliability)),
+      compatibility: Math.max(...results.map((result) => result.compatibility)),
+      testGap: Math.max(...results.map((result) => result.testGap)),
     },
   };
 }
@@ -263,13 +280,13 @@ export async function locateSourceSignal(
   };
 }
 
-function sourceRegions(content: string) {
+function sourceRegions(content: string, linesPerRegion = REGION_LINES) {
   const lines = content.split("\n");
-  const count = Math.ceil(lines.length / REGION_LINES);
+  const count = Math.ceil(lines.length / linesPerRegion);
   return Array.from({ length: count }, (_, index) => ({
     id: "R" + (index + 1),
-    startLine: index * REGION_LINES + 1,
-    content: lines.slice(index * REGION_LINES, (index + 1) * REGION_LINES).join("\n"),
+    startLine: index * linesPerRegion + 1,
+    content: lines.slice(index * linesPerRegion, (index + 1) * linesPerRegion).join("\n"),
   }));
 }
 
@@ -284,5 +301,40 @@ function selectRelatedTests(file: SourceFile, testFiles: SourceFile[]): SourceFi
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.test.path.localeCompare(b.test.path))
     .slice(0, MAX_RELATED_TESTS)
-    .map(({ test }) => test);
+    .map(({ test }) => compactTest(test, stem));
+}
+
+function compactTest(test: SourceFile, sourceStem: string): SourceFile {
+  const lines = test.content.split("\n");
+  const selected = new Set<number>();
+  const stem = sourceStem.toLowerCase();
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index].toLowerCase();
+    if (
+      line.includes(stem) ||
+      line.includes("describe(") ||
+      line.includes("describe.") ||
+      line.includes("test(") ||
+      line.includes("test.") ||
+      line.includes("it(") ||
+      line.includes("it.")
+    ) {
+      for (let nearby = Math.max(0, index - 2); nearby <= Math.min(lines.length - 1, index + 2); nearby++) {
+        selected.add(nearby);
+      }
+    }
+  }
+
+  let content = [...selected]
+    .sort((a, b) => a - b)
+    .map((index) => lines[index])
+    .join("\n");
+  if (content.length === 0) content = test.content;
+  if (content.length > MAX_TEST_SNIPPET_CHARS) {
+    const side = Math.floor((MAX_TEST_SNIPPET_CHARS - 7) / 2);
+    content = content.slice(0, side) + "\n...\n" + content.slice(-side);
+  }
+
+  return { path: test.path, content };
 }
