@@ -73,7 +73,7 @@ function fill(p) {
 }
 
 function section(label, aside, ...content) {
-  const expanded = label === "Workflow" || label === "Findings";
+  const expanded = label === "Review funnel" || label === "Findings";
   return h(
     "details",
     { class: "block", open: expanded },
@@ -105,7 +105,7 @@ function summary(report) {
   const stats = [
     { value: report.screenedFiles, label: "files" },
     { value: tests.length, label: testLabel, title: tests.join("\n") || null },
-    { value: report.followedSignals, label: "followed", title: `signals ≥ ${THRESHOLD.toFixed(2)} inspected` },
+    { value: report.followedSignals, label: "investigated", title: "potential concerns at or above " + THRESHOLD.toFixed(2) + " reviewed for evidence" },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
   ];
@@ -127,27 +127,64 @@ function workflow(report) {
   const flow = report.workflow;
   if (!flow) return null;
 
+  const categoryCount = dimensionsFor(report).length;
+  const fileKind = report.mode === "codebase" ? "complete source files" : "changed source files";
   const steps = [
-    [flow.screenedCells, "cells"],
-    [flow.thresholdSignals, "signals"],
-    [flow.followedSignals, "inspected"],
-    [flow.locatedFindings, "located"],
-    [flow.routedFindings, "routed"],
+    {
+      value: flow.screenedCells,
+      label: "risk checks",
+      detail: "file × category",
+      title: "One screening probability for every file and concern category",
+    },
+    {
+      value: flow.thresholdSignals,
+      label: "flagged",
+      detail: "at least " + THRESHOLD.toFixed(2),
+      title: "Screening probabilities at or above the follow-up threshold",
+    },
+    {
+      value: flow.followedSignals,
+      label: "investigated",
+      detail: "evidence review",
+      title: "Highest-risk potential concerns selected for deeper evidence review",
+    },
+    {
+      value: flow.locatedFindings,
+      label: "supported",
+      detail: "evidence found",
+      title: "Concerns supported by a concrete source region and mechanism",
+    },
+    {
+      value: flow.routedFindings,
+      label: "assigned",
+      detail: "owner suggested",
+      title: "Higher-severity findings assigned to a reviewer specialty",
+    },
   ];
 
   return section(
-    "Workflow",
-    h("span", { class: "count" }, `${flow.profiledFiles ?? 0} profiled`),
+    "Review funnel",
+    null,
+    h(
+      "p",
+      { class: "section-note" },
+      report.screenedFiles + " " + fileKind + " were checked across " + categoryCount + " concern categories. Screening is broad; only higher probabilities continue to evidence review.",
+    ),
     h(
       "ol",
       { class: "flow" },
-      steps.map(([value, label], index) =>
+      steps.map((step, index) =>
         h(
           "li",
-          {},
+          { title: step.title },
           index > 0 && h("span", { class: "flow-arrow", "aria-hidden": "true" }, "→"),
-          h("strong", {}, isNum(value) ? value : "–"),
-          h("span", {}, label),
+          h(
+            "span",
+            { class: "flow-step" },
+            h("strong", {}, isNum(step.value) ? step.value : "–"),
+            h("span", {}, step.label),
+            h("small", {}, step.detail),
+          ),
         ),
       ),
     ),
@@ -196,8 +233,13 @@ function profiles(report) {
   );
 
   return section(
-    "File profiles",
+    "Files selected for closer review",
     h("span", { class: "count" }, list.length),
+    h(
+      "p",
+      { class: "section-note" },
+      "These files had the highest screening scores. The category summarizes the file or change; review priority runs from 0 (routine) to 3 (specialist attention).",
+    ),
     h("div", { class: "profiles-wrap" }, table),
   );
 }
@@ -205,6 +247,7 @@ function profiles(report) {
 function matrix(report) {
   const dimensions = dimensionsFor(report);
   const rows = [...report.matrix].sort((a, b) => maxP(b, dimensions) - maxP(a, dimensions));
+  const screeningNote = "Each cell is the estimated probability, from 0 to 1, that a file has that kind of concern. Darker cells mean higher probability; cells at or above " + THRESHOLD.toFixed(2) + " are flagged for deeper review. Screening is triage, not a confirmed finding.";
 
   const toggle = h(
     "button",
@@ -212,7 +255,7 @@ function matrix(report) {
       class: "toggle",
       type: "button",
       "aria-pressed": String(showValues),
-      title: "Show every probability",
+      title: "Show the exact probability in every cell",
       onclick: () => {
         showValues = !showValues;
         render(lastState);
@@ -235,7 +278,12 @@ function matrix(report) {
   );
 
   if (rows.length === 0) {
-    return section("Noul matrix", null, quiet("No source files screened"));
+    return section(
+      "Risk screening by file",
+      null,
+      h("p", { class: "section-note" }, screeningNote),
+      quiet("No source files screened"),
+    );
   }
 
   const table = h(
@@ -290,7 +338,12 @@ function matrix(report) {
     ),
   );
 
-  return section("Noul matrix", legend, h("div", { class: "matrix-wrap" }, table));
+  return section(
+    "Risk screening by file",
+    legend,
+    h("p", { class: "section-note" }, screeningNote),
+    h("div", { class: "matrix-wrap" }, table),
+  );
 }
 
 function maxP(row, dimensions) {
@@ -314,14 +367,20 @@ function findings(report) {
   const list = report.findings;
   const labels = Object.fromEntries(dimensionsFor(report).map(([key, label]) => [key, label]));
   const count = h("span", { class: "count" }, list.length);
+  const findingsNote = "These concerns passed screening and were tied to a concrete source region and mechanism. Severity runs from 0 (no meaningful impact) to 3 (critical). Findings are review leads, not proof of a defect.";
 
   if (list.length === 0) {
     const followed = report.followedSignals;
     const detail =
       followed > 0
-        ? `${followed} ${followed === 1 ? "signal" : "signals"} followed · none located`
-        : `No signal reached ${THRESHOLD.toFixed(2)}`;
-    return section("Findings", count, quiet("No findings", detail));
+        ? followed + " potential " + (followed === 1 ? "concern was" : "concerns were") + " investigated; none had enough evidence to become a finding"
+        : "No screening probability reached the " + THRESHOLD.toFixed(2) + " follow-up threshold";
+    return section(
+      "Findings",
+      count,
+      h("p", { class: "section-note" }, findingsNote),
+      quiet("No supported findings", detail),
+    );
   }
 
   const table = h(
@@ -377,7 +436,12 @@ function findings(report) {
     ),
   );
 
-  return section("Findings", count, table);
+  return section(
+    "Findings",
+    count,
+    h("p", { class: "section-note" }, findingsNote),
+    table,
+  );
 }
 
 function renderMeta(state) {
