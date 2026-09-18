@@ -50,6 +50,17 @@ export type FileProfile = {
   reviewPriorityConfidence: number;
 };
 
+/** Jev calls made for one review. costUsd is null on a route that does not price calls. */
+export type JevUsage = {
+  route: "typesafe" | "gateway";
+  model: string | null;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  latencyMs: number;
+};
+
 export type ReviewReport = {
   mode: ReviewMode;
   scope: string;
@@ -74,6 +85,7 @@ export type ReviewReport = {
     routedFindings: number;
   };
   findings: Array<Omit<Finding<{ path: string }>, "file"> & { file: string }>;
+  usage: JevUsage;
 };
 
 // Deliberately loose so a report saved by an older version remains viewable.

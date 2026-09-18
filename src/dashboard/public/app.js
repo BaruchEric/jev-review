@@ -191,6 +191,42 @@ function workflow(report) {
   );
 }
 
+function usage(report) {
+  const u = report.usage;
+  if (!u) return null;
+  const priced = typeof u.costUsd === "number";
+  const cost = priced ? "$" + u.costUsd.toFixed(4) : "–";
+  const stats = [
+    { value: u.calls, label: "Jev calls", title: "One request per screening, profile, and evidence step" },
+    { value: u.inputTokens.toLocaleString(), label: "input tokens" },
+    { value: u.outputTokens.toLocaleString(), label: "output tokens" },
+    {
+      value: cost,
+      label: "cost",
+      cls: "lead",
+      title: priced ? "Summed from the per-call price the Vercel AI Gateway reports" : "The direct TypeSafe route does not report a price per call",
+    },
+    { value: u.calls ? Math.round(u.latencyMs / u.calls) + " ms" : "–", label: "avg call", title: "Wall time per Jev request, including retries" },
+  ];
+  const aside = u.model ? u.model + " via " + u.route : u.route;
+  return section(
+    "Jev usage",
+    aside,
+    h(
+      "dl",
+      { class: "stats" },
+      stats.map((stat) =>
+        h(
+          "div",
+          { class: `stat ${stat.cls ?? ""}`, title: stat.title },
+          h("dt", {}, stat.label),
+          h("dd", {}, stat.value ?? "–"),
+        ),
+      ),
+    ),
+  );
+}
+
 function profiles(report) {
   const list = report.profiles;
   if (!Array.isArray(list) || list.length === 0) return null;
@@ -470,6 +506,7 @@ function render(state) {
         ...[
           summary(state.report),
           workflow(state.report),
+          usage(state.report),
           profiles(state.report),
           matrix(state.report),
           findings(state.report),

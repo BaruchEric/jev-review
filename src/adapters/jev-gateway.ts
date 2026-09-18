@@ -1,6 +1,7 @@
-// Jev client selection. The review code calls client.systemOne() with the
-// TypeSafe SDK's question helpers and reads the SDK's answer shapes. This module
-// keeps that contract while letting the request travel one of two ways:
+// Jev client selection and usage accounting. The review code calls
+// client.systemOne() with the TypeSafe SDK's question helpers and reads the SDK's
+// answer shapes. This module keeps that contract while letting the request travel
+// one of two ways:
 //
 //   TYPESAFE_API_KEY set     -> the SDK's own TypeSafeClient, straight to TypeSafe
 //   AI_GATEWAY_API_KEY set   -> experimental_evaluate from the AI SDK through the
@@ -9,6 +10,9 @@
 // The gateway path exists because a Vercel project often already has a gateway key
 // and no TypeSafe account. The AI SDK calls Noul "boolean" and returns confidence
 // in provider metadata rather than on each answer, so the adapter maps both ways.
+//
+// Every call is also tallied into a process-wide ledger (calls, tokens, cost when
+// the route reports it, wall time) that the report and the CLI summary read.
 import { createGateway } from "@ai-sdk/gateway";
 import {
   APICallError,
@@ -22,6 +26,7 @@ import {
   type SystemOneResult,
   TypeSafeClient,
 } from "@typesafe-ai/sdk";
+import type { JevUsage } from "../domain/types.ts";
 
 export interface JevClient {
   systemOne<const Q extends Questions>(
@@ -35,12 +40,63 @@ export const GATEWAY_MODEL = process.env.JEV_GATEWAY_MODEL ?? "typesafe-ai/jev";
 const ATTEMPT_TIMEOUT_MS = 8000;
 const ATTEMPTS = 3;
 
+const ledger: JevUsage = emptyUsage("typesafe");
+
+function emptyUsage(route: JevUsage["route"]): JevUsage {
+  return { route, model: null, calls: 0, inputTokens: 0, outputTokens: 0, costUsd: null, latencyMs: 0 };
+}
+
+/** Start a fresh tally; a review calls this once before its first judgment. */
+export function resetUsage(): void {
+  Object.assign(ledger, emptyUsage(ledger.route));
+}
+
+/** A copy of the tally so far. costUsd stays null on routes that do not price calls. */
+export function readUsage(): JevUsage {
+  return { ...ledger };
+}
+
+function record(
+  route: JevUsage["route"],
+  model: string,
+  tokens: { input: number; output: number },
+  costUsd: number | undefined,
+  latencyMs: number,
+): void {
+  ledger.route = route;
+  ledger.model = model;
+  ledger.calls += 1;
+  ledger.inputTokens += tokens.input;
+  ledger.outputTokens += tokens.output;
+  ledger.latencyMs += Math.round(latencyMs);
+  if (costUsd !== undefined) ledger.costUsd = (ledger.costUsd ?? 0) + costUsd;
+}
+
 export function createJevClient(): JevClient {
-  if (process.env.TYPESAFE_API_KEY) return new TypeSafeClient();
+  if (process.env.TYPESAFE_API_KEY) return createDirectClient();
   if (process.env.AI_GATEWAY_API_KEY) return createGatewayClient(process.env.AI_GATEWAY_API_KEY);
   throw new Error(
     "No Jev credentials. Set TYPESAFE_API_KEY (TypeSafe direct) or AI_GATEWAY_API_KEY (Vercel AI Gateway) in .env.",
   );
+}
+
+function createDirectClient(): JevClient {
+  const client = new TypeSafeClient();
+  ledger.route = "typesafe";
+  return {
+    async systemOne<const Q extends Questions>(request: Pick<SystemOneRequest<Q>, "state" | "questions">) {
+      const started = performance.now();
+      const result = await client.systemOne(request);
+      record(
+        "typesafe",
+        result.model,
+        { input: result.usage.input_tokens, output: result.usage.output_tokens },
+        undefined,
+        performance.now() - started,
+      );
+      return result;
+    },
+  };
 }
 
 function toGatewayQuestion(question: Question): GatewayQuestion {
@@ -56,17 +112,25 @@ function toGatewayQuestion(question: Question): GatewayQuestion {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
 function readConfidence(meta: unknown): Record<string, number> {
-  if (typeof meta !== "object" || meta === null) return {};
-  const typesafe = (meta as { typesafe?: unknown }).typesafe;
-  if (typeof typesafe !== "object" || typesafe === null) return {};
-  const confidence = (typesafe as { confidence?: unknown }).confidence;
-  if (typeof confidence !== "object" || confidence === null) return {};
+  const confidence = asRecord(asRecord(asRecord(meta)?.typesafe)?.confidence);
   const out: Record<string, number> = {};
-  for (const [id, value] of Object.entries(confidence as Record<string, unknown>)) {
+  for (const [id, value] of Object.entries(confidence ?? {})) {
     if (typeof value === "number") out[id] = value;
   }
   return out;
+}
+
+/** The gateway prices each call and reports it as a string or number in its metadata. */
+function readCost(meta: unknown): number | undefined {
+  const cost = asRecord(asRecord(meta)?.gateway)?.cost;
+  if (typeof cost !== "number" && typeof cost !== "string") return undefined;
+  const n = Number(cost);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function topProbability(probabilities: Record<string, number> | undefined, key: string): number {
@@ -80,6 +144,7 @@ function isRetryable(error: unknown): boolean {
 
 function createGatewayClient(apiKey: string): JevClient {
   const gateway = createGateway({ apiKey });
+  ledger.route = "gateway";
   return {
     async systemOne<const Q extends Questions>(request: Pick<SystemOneRequest<Q>, "state" | "questions">) {
       // The SDK allows a null state; the AI SDK does not, and a review with no
@@ -91,6 +156,7 @@ function createGatewayClient(apiKey: string): JevClient {
         questions[id] = toGatewayQuestion(question);
       }
 
+      const started = performance.now();
       let result: Awaited<ReturnType<typeof evaluate>> | undefined;
       for (let attempt = 1; result === undefined; attempt++) {
         try {
@@ -105,6 +171,13 @@ function createGatewayClient(apiKey: string): JevClient {
           if (attempt >= ATTEMPTS || !isRetryable(error)) throw error;
         }
       }
+      record(
+        "gateway",
+        result.response.modelId,
+        { input: result.usage.inputTokens ?? 0, output: result.usage.outputTokens ?? 0 },
+        readCost(result.providerMetadata),
+        performance.now() - started,
+      );
 
       const confidence = readConfidence(result.providerMetadata);
       const answers: Record<string, unknown> = {};

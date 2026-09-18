@@ -18,6 +18,7 @@ import type {
   Screening,
   Signal,
 } from "../domain/types.ts";
+import { readUsage, resetUsage } from "../adapters/jev-gateway.ts";
 
 export type Log = (message: string) => void;
 
@@ -39,6 +40,7 @@ export async function runReview<File extends { path: string }, Context extends {
   log: Log,
   strategy: Strategy<File, Context>,
 ): Promise<ReviewReport> {
+  resetUsage();
   const { files, contextFiles } = strategy.discover(scope);
   if (files.length === 0) {
     throw new Error("No " + strategy.subject + " JavaScript or TypeScript files found under " + scope);
@@ -108,6 +110,7 @@ export async function runReview<File extends { path: string }, Context extends {
       routedFindings: findings.filter((finding) => finding.owner !== null).length,
     },
     findings: findings.map(({ file, ...finding }) => ({ file: file.path, ...finding })),
+    usage: readUsage(),
   };
 }
 

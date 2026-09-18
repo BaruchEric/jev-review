@@ -25,6 +25,7 @@ Noul risk matrix
 - Applies thresholds and workflow policy in code.
 - Shows large reports in collapsible dashboard sections.
 - Binds the dashboard to `127.0.0.1` and never serves environment files.
+- Tallies Jev calls, tokens, wall time, and (on the gateway route) cost per review; printed after each run and shown in the dashboard.
 
 ## Quick Start
 
