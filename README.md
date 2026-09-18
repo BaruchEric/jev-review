@@ -28,12 +28,12 @@ Noul risk matrix
 
 ## Quick Start
 
-Requires Node.js 24+, Git, and a [TypeSafe API key](https://console.typesafe.ai/settings/keys).
+Requires Node.js 24+, Git, and either a [TypeSafe API key](https://console.typesafe.ai/settings/keys) or a [Vercel AI Gateway key](https://vercel.com/ai-gateway) (set `AI_GATEWAY_API_KEY`; requests then go through the gateway to `typesafe-ai/jev`).
 
 ```bash
 npm install
 cp .env.example .env
-# Add TYPESAFE_API_KEY to .env
+# Add TYPESAFE_API_KEY, or AI_GATEWAY_API_KEY for the Vercel AI Gateway, to .env
 
 # Review the current Git diff
 npm run review:changes:save -- /path/to/git/repository

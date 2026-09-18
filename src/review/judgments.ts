@@ -1,5 +1,6 @@
 // Change-review judgments. Every call is narrow and receives patch evidence.
-import { choice, noul, score, TypeSafeClient } from "@typesafe-ai/sdk";
+import { choice, noul, score } from "@typesafe-ai/sdk";
+import { createJevClient } from "../adapters/jev-gateway.ts";
 import {
   BLOCKING_SEVERITY,
   type Dimension,
@@ -20,7 +21,7 @@ import type {
   Signal,
 } from "../domain/types.ts";
 
-const client = new TypeSafeClient();
+const client = createJevClient();
 
 const changeTypes = {
   behavior: "Adds or changes runtime behavior",
